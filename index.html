@@ -5,6 +5,33 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="description" content="Drop Merge — 投放数字方块，相邻同数合并，冲击更高分。免费休闲小游戏。">
 <title>Drop Merge · 数字合合乐</title>
+<script>
+// 平台 SDK 按域名条件加载（独立运行时完全不加载，游戏行为不变）
+(function () {
+  var host = location.hostname || "";
+  try {
+    if (host.indexOf("crazygames") !== -1) {
+      var s1 = document.createElement("script");
+      s1.src = "https://sdk.crazygames.com/crazygames-sdk-v3.js";
+      s1.onload = function () {
+        if (window.CrazyGames && window.CrazyGames.SDK) {
+          window.CrazyGames.SDK.init().then(function () {
+            try { window.CrazyGames.SDK.game.loadingStart(); } catch (e) {}
+            window.addEventListener("load", function () { try { window.CrazyGames.SDK.game.loadingStop(); } catch (e) {} });
+          }).catch(function () {});
+        }
+      };
+      document.head.appendChild(s1);
+      window.__portal = "crazygames";
+    } else if (host.indexOf("gamedistribution") !== -1 || host.indexOf("html5.gamedistribution.com") !== -1 || host.indexOf("gd.games") !== -1) {
+      var s2 = document.createElement("script");
+      s2.src = "https://sdk.gamedistribution.com/v2/main.min.js";
+      document.head.appendChild(s2);
+      window.__portal = "gamedistribution";
+    }
+  } catch (e) {}
+})();
+</script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; overflow: hidden; background: #12121e; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
@@ -136,6 +163,11 @@ function drop() {
   state = "DROP";
   cur.targetY = OY + r * CELL + CELL / 2;
   cur.landingR = r; cur.landingC = c;
+  try {
+    if (window.__portal === "crazygames" && window.CrazyGames && window.CrazyGames.SDK) {
+      window.CrazyGames.SDK.game.gameplayStart();
+    }
+  } catch (e) {}
   beep(220, 0.08, "square", 0.05);
 }
 
@@ -205,6 +237,13 @@ function gameOver() {
   document.getElementById("finalScore").textContent = score;
   document.getElementById("overlay").style.display = "flex";
   beep(180, 0.4, "sawtooth", 0.08);
+  // 平台埋点：一局结束（各 SDK 已做域名守卫）
+  try {
+    if (window.__portal === "crazygames" && window.CrazyGames && window.CrazyGames.SDK) {
+      window.CrazyGames.SDK.game.gameplayStop();
+      window.CrazyGames.SDK.game.happytime();
+    }
+  } catch (e) {}
 }
 
 // ---------- 渲染 ----------
