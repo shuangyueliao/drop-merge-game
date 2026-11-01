@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="description" content="Drop Merge — 投放数字方块，相邻同数合并，冲击更高分。免费休闲小游戏。">
+<title>Drop Merge · 数字合合乐</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overflow: hidden; background: #12121e; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  #wrap { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  #hud { width: 100%; max-width: 480px; display: flex; justify-content: space-between; align-items: center; padding: 10px 16px 6px; color: #e8e8f2; }
+  .stat { text-align: center; }
+  .stat .label { font-size: 11px; color: #8a8aa8; letter-spacing: 1px; }
+  .stat .val { font-size: 22px; font-weight: 800; }
+  #title { font-size: 15px; font-weight: 700; color: #7c8cff; letter-spacing: 2px; }
+  #nextBox { text-align: center; color: #8a8aa8; font-size: 11px; }
+  #nextTile { width: 34px; height: 34px; border-radius: 8px; margin: 3px auto 0; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; color: #fff; background: #4f5ff0; }
+  canvas { display: block; border-radius: 14px; touch-action: none; }
+  #overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(10,10,20,.72); backdrop-filter: blur(4px); z-index: 5; }
+  #panel { background: #1c1c30; border: 1px solid #33334f; border-radius: 18px; padding: 28px 36px; text-align: center; color: #fff; }
+  #panel h2 { font-size: 22px; margin-bottom: 6px; }
+  #panel p { color: #9a9ac0; font-size: 13px; margin-bottom: 16px; }
+  #panel .final { font-size: 34px; font-weight: 900; color: #ffd76a; margin-bottom: 18px; }
+  #restart { background: linear-gradient(135deg, #5b6cff, #8a5bff); color: #fff; border: none; border-radius: 12px; padding: 12px 34px; font-size: 16px; font-weight: 700; cursor: pointer; }
+  #restart:active { transform: scale(.97); }
+  #footer { color: #55556e; font-size: 11px; padding: 6px; }
+  #footer a { color: #7c8cff; text-decoration: none; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">
+    <div class="stat"><div class="label">SCORE</div><div class="val" id="score">0</div></div>
+    <div id="title">DROP MERGE</div>
+    <div id="nextBox">NEXT<div id="nextTile">2</div></div>
+    <div class="stat"><div class="label">BEST</div><div class="val" id="best">0</div></div>
+  </div>
+  <div style="position:relative">
+    <canvas id="game"></canvas>
+    <div id="overlay"><div id="panel">
+      <h2>Game Over</h2><p>格子堆到顶啦</p>
+      <div class="final" id="finalScore">0</div>
+      <button id="restart">再来一局</button>
+    </div></div>
+  </div>
+  <div id="footer">made by <a href="https://github.com/shuangyueliao" target="_blank" rel="noopener">shuangyueliao</a></div>
+</div>
+<script>
+"use strict";
+// ---------- 基础 ----------
+var COLS = 5, ROWS = 8;
+var W = 480, H = 700;
+var canvas = document.getElementById("game");
+var ctx = canvas.getContext("2d");
+var dpr = Math.min(window.devicePixelRatio || 1, 2);
+canvas.width = W * dpr; canvas.height = H * dpr;
+canvas.style.width = "100%"; canvas.style.maxWidth = W + "px";
+ctx.scale(dpr, dpr);
+
+var CELL = Math.min((W - 24) / COLS, (H - 30) / ROWS);
+var GRID_W = CELL * COLS, GRID_H = CELL * ROWS;
+var OX = (W - GRID_W) / 2, OY = H - GRID_H - 16;
+
+var grid = [];          // grid[c][r] = {v, pop} | null
+var state = "AIM";      // AIM | DROP | RESOLVE | OVER
+var score = 0, best = 0;
+var cur = null;         // {v, col, y, targetY}
+var nextV = 2;
+var combo = 0;
+var particles = [];
+var floats = [];
+var aimCol = 2;
+var dropSpeed = 1800;   // px/s
+try { best = parseInt(localStorage.getItem("dm_best") || "0", 10) || 0; } catch (e) {}
+
+function reset() {
+  grid = [];
+  for (var c = 0; c < COLS; c++) { grid[c] = []; for (var r = 0; r < ROWS; r++) grid[c][r] = null; }
+  score = 0; combo = 0; particles = []; floats = [];
+  document.getElementById("score").textContent = "0";
+  document.getElementById("overlay").style.display = "none";
+  spawnNext();
+  state = "AIM";
+}
+
+function spawnNext() {
+  var pool = [2, 2, 2, 4, 4, 8];
+  var v = pool[Math.floor(Math.random() * pool.length)];
+  if (score > 4000) pool.push(16, 16);
+  if (score > 12000) pool.push(32);
+  if (Math.random() < 0.25) v = pool[Math.floor(Math.random() * pool.length)];
+  cur = { v: v, col: 2, y: -CELL };
+  nextV = pool[Math.floor(Math.random() * pool.length)];
+  var nt = document.getElementById("nextTile");
+  nt.textContent = nextV; nt.style.background = colorOf(nextV);
+}
+
+function colorOf(v) {
+  var map = { 2: "#5b6cff", 4: "#00b8a9", 8: "#f6a623", 16: "#ff6b81", 32: "#a55eea", 64: "#2ecc71", 128: "#e17055", 256: "#fdcb6e", 512: "#00cec9", 1024: "#e84393", 2048: "#d63031" };
+  return map[v] || "#8899ff";
+}
+
+function colHeight(c) { var h = 0; for (var r = 0; r < ROWS; r++) if (grid[c][r]) h++; return h; }
+function topEmptyRow(c) { for (var r = ROWS - 1; r >= 0; r--) if (!grid[c][r]) return r; return -1; }
+
+// ---------- 音效 ----------
+var actx = null;
+function beep(freq, dur, type, gainv) {
+  try {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === "suspended") actx.resume();
+    var o = actx.createOscillator(), g = actx.createGain();
+    o.type = type || "sine"; o.frequency.value = freq;
+    g.gain.setValueAtTime(gainv || 0.12, actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + dur);
+    o.connect(g); g.connect(actx.destination);
+    o.start(); o.stop(actx.currentTime + dur);
+  } catch (e) {}
+}
+
+// ---------- 特效 ----------
+function popFX(x, y, color) {
+  for (var i = 0; i < 10; i++) {
+    var a = Math.random() * Math.PI * 2, s = 60 + Math.random() * 120;
+    particles.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 40, life: 0.5, color: color, size: 2 + Math.random() * 3 });
+  }
+}
+function floatText(x, y, text, color) { floats.push({ x: x, y: y, text: text, life: 0.9, color: color || "#fff" }); }
+
+// ---------- 落子与合并 ----------
+function drop() {
+  if (state !== "AIM") return;
+  var c = cur.col, r = topEmptyRow(c);
+  if (r < 0) { gameOver(); return; }
+  state = "DROP";
+  cur.targetY = OY + r * CELL + CELL / 2;
+  cur.landingR = r; cur.landingC = c;
+  beep(220, 0.08, "square", 0.05);
+}
+
+function land() {
+  var c = cur.landingC, r = cur.landingR;
+  grid[c][r] = { v: cur.v, scale: 1.25 };
+  combo = 0;
+  resolveMerges(c, r);
+  if (state === "OVER") return;
+  checkOver();
+  if (state !== "OVER") { spawnNext(); state = "AIM"; }
+}
+
+function resolveMerges(fromC, fromR) {
+  var merged = true, guard = 0;
+  while (merged && guard++ < 40) {
+    merged = false;
+    // 找一对相邻同值（含刚生成的合并产物），从新位置向外扩散
+    outer:
+    for (var r = ROWS - 1; r >= 0; r--) for (var c = 0; c < COLS; c++) {
+      var cell = grid[c][r]; if (!cell) continue;
+      var dirs = [[0, -1], [-1, 0], [1, 0]];
+      for (var d = 0; d < dirs.length; d++) {
+        var c2 = c + dirs[d][0], r2 = r + dirs[d][1];
+        if (c2 < 0 || c2 >= COLS || r2 < 0 || r2 >= ROWS) continue;
+        var nb = grid[c2][r2];
+        if (nb && nb.v === cell.v) {
+          mergeInto(c, r, c2, r2);
+          merged = true; break outer;
+        }
+      }
+    }
+  }
+  // 重力下沉
+  applyGravity();
+}
+
+function mergeInto(keepC, keepR, otherC, otherR) {
+  var a = grid[keepC][keepR], b = grid[otherC][otherR];
+  var nv = a.v * 2;
+  combo++;
+  var gain = nv * (1 + Math.min(combo - 1, 5));
+  score += gain;
+  document.getElementById("score").textContent = score;
+  if (score > best) { best = score; try { localStorage.setItem("dm_best", String(best)); } catch (e) {} document.getElementById("best").textContent = best; }
+  grid[otherC][otherR] = null;
+  grid[keepC][keepR] = { v: nv, scale: 1.35 };
+  popFX(OX + otherC * CELL + CELL / 2, OY + otherR * CELL + CELL / 2, colorOf(a.v));
+  floatText(OX + keepC * CELL + CELL / 2, OY + keepR * CELL, "+" + gain, "#ffd76a");
+  beep(300 + combo * 90, 0.12, "triangle", 0.1);
+}
+
+function applyGravity() {
+  for (var c = 0; c < COLS; c++) {
+    var stack = [];
+    for (var r = 0; r < ROWS; r++) if (grid[c][r]) stack.push(grid[c][r]);
+    for (var r2 = 0; r2 < ROWS; r2++) grid[c][r2] = r2 >= ROWS - stack.length ? stack[r2 - (ROWS - stack.length)] : null;
+  }
+}
+
+function checkOver() {
+  for (var c = 0; c < COLS; c++) if (grid[c][0]) { gameOver(); return; }
+}
+
+function gameOver() {
+  state = "OVER";
+  document.getElementById("finalScore").textContent = score;
+  document.getElementById("overlay").style.display = "flex";
+  beep(180, 0.4, "sawtooth", 0.08);
+}
+
+// ---------- 渲染 ----------
+function drawTile(x, y, size, v, scale) {
+  var s = size * (scale || 1);
+  var pad = 4;
+  ctx.save();
+  ctx.translate(x, y);
+  var g = ctx.createLinearGradient(0, -s / 2, 0, s / 2);
+  g.addColorStop(0, colorOf(v)); g.addColorStop(1, shade(colorOf(v), -0.25));
+  ctx.fillStyle = g;
+  roundRect(ctx, -s / 2 + pad, -s / 2 + pad, s - pad * 2, s - pad * 2, 10);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,.9)";
+  ctx.font = "800 " + Math.round(s * (v >= 1024 ? 0.24 : v >= 128 ? 0.3 : 0.38)) + "px -apple-system, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(String(v), 0, 1);
+  ctx.restore();
+}
+function shade(hex, amt) {
+  var n = parseInt(hex.slice(1), 16);
+  var r = Math.max(0, Math.min(255, (n >> 16) + Math.round(255 * amt)));
+  var g = Math.max(0, Math.min(255, ((n >> 8) & 255) + Math.round(255 * amt)));
+  var b = Math.max(0, Math.min(255, (n & 255) + Math.round(255 * amt)));
+  return "rgb(" + r + "," + g + "," + b + ")";
+}
+function roundRect(c, x, y, w, h, rad) {
+  c.beginPath();
+  c.moveTo(x + rad, y);
+  c.arcTo(x + w, y, x + w, y + h, rad);
+  c.arcTo(x + w, y + h, x, y + h, rad);
+  c.arcTo(x, y + h, x, y, rad);
+  c.arcTo(x, y, x + w, y, rad);
+  c.closePath();
+}
+
+var last = 0;
+function frame(t) {
+  var dt = Math.min((t - last) / 1000, 0.05); last = t;
+  // 背景
+  var bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, "#181828"); bg.addColorStop(1, "#101018");
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  // 网格
+  ctx.fillStyle = "rgba(255,255,255,.035)";
+  roundRect(ctx, OX, OY, GRID_W, GRID_H, 12); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.05)";
+  for (var c = 1; c < COLS; c++) { ctx.beginPath(); ctx.moveTo(OX + c * CELL, OY + 6); ctx.lineTo(OX + c * CELL, OY + GRID_H - 6); ctx.stroke(); }
+  // 瞄准列
+  if (state === "AIM") {
+    ctx.fillStyle = "rgba(124,140,255,.10)";
+    ctx.fillRect(OX + aimCol * CELL + 3, OY, CELL - 6, GRID_H);
+  }
+  // 已落方块
+  for (var c2 = 0; c2 < COLS; c2++) for (var r = 0; r < ROWS; r++) {
+    var cell = grid[c2][r]; if (!cell) continue;
+    if (cell.scale > 1) cell.scale = Math.max(1, cell.scale - dt * 3);
+    drawTile(OX + c2 * CELL + CELL / 2, OY + r * CELL + CELL / 2, CELL - 6, cell.v, cell.scale);
+  }
+  // 下落中的方块
+  if (state === "DROP" && cur) {
+    cur.y += dropSpeed * dt;
+    var ty = cur.targetY;
+    if (cur.y >= ty) {
+      cur.y = ty; land();
+    } else {
+      drawTile(OX + cur.col * CELL + CELL / 2, cur.y, CELL - 6, cur.v, 1);
+    }
+  }
+  if (state === "AIM" && cur) {
+    drawTile(OX + aimCol * CELL + CELL / 2, 26, CELL - 10, cur.v, 1);
+  }
+  // 粒子
+  for (var p = particles.length - 1; p >= 0; p--) {
+    var pt = particles[p]; pt.life -= dt;
+    if (pt.life <= 0) { particles.splice(p, 1); continue; }
+    pt.x += pt.vx * dt; pt.y += pt.vy * dt; pt.vy += 300 * dt;
+    ctx.globalAlpha = Math.max(0, pt.life / 0.5);
+    ctx.fillStyle = pt.color;
+    ctx.fillRect(pt.x - pt.size / 2, pt.y - pt.size / 2, pt.size, pt.size);
+    ctx.globalAlpha = 1;
+  }
+  // 浮动分数
+  for (var f = floats.length - 1; f >= 0; f--) {
+    var fl = floats[f]; fl.life -= dt; fl.y -= 40 * dt;
+    if (fl.life <= 0) { floats.splice(f, 1); continue; }
+    ctx.globalAlpha = Math.min(1, fl.life / 0.4);
+    ctx.fillStyle = fl.color; ctx.font = "800 18px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(fl.text, fl.x, fl.y);
+    ctx.globalAlpha = 1;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---------- 输入 ----------
+function colFromX(clientX) {
+  var rect = canvas.getBoundingClientRect();
+  var x = (clientX - rect.left) / rect.width * W;
+  var c = Math.floor((x - OX) / CELL);
+  return Math.max(0, Math.min(COLS - 1, c));
+}
+function restartAudio() { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === "suspended") actx.resume(); } catch (e) {} }
+canvas.addEventListener("mousemove", function (e) { if (state === "AIM") aimCol = colFromX(e.clientX); });
+canvas.addEventListener("touchmove", function (e) { e.preventDefault(); if (state === "AIM") aimCol = colFromX(e.touches[0].clientX); }, { passive: false });
+canvas.addEventListener("mousedown", function (e) { restartAudio(); aimCol = colFromX(e.clientX); drop(); });
+canvas.addEventListener("touchstart", function (e) { e.preventDefault(); restartAudio(); aimCol = colFromX(e.touches[0].clientX); drop(); }, { passive: false });
+document.getElementById("restart").addEventListener("click", reset);
+document.addEventListener("keydown", function (e) {
+  if (state === "OVER" && (e.key === "Enter" || e.key === " ")) { reset(); return; }
+  if (e.key === "ArrowLeft") aimCol = Math.max(0, aimCol - 1);
+  if (e.key === "ArrowRight") aimCol = Math.min(COLS - 1, aimCol + 1);
+  if (e.key === "ArrowDown" || e.key === " ") { e.preventDefault(); drop(); }
+});
+
+document.getElementById("best").textContent = best;
+reset();
+</script>
+</body>
+</html>
