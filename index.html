@@ -158,6 +158,7 @@ function floatText(x, y, text, color) { floats.push({ x: x, y: y, text: text, li
 // ---------- 落子与合并 ----------
 function drop() {
   if (state !== "AIM") return;
+  cur.col = aimCol; // 修复：实际落点跟随瞄准列（此前固定中间列）
   var c = cur.col, r = topEmptyRow(c);
   if (r < 0) { gameOver(); return; }
   state = "DROP";
@@ -361,6 +362,8 @@ document.addEventListener("keydown", function (e) {
 
 document.getElementById("best").textContent = best;
 reset();
+// 调试/测试钩子（不影响游戏逻辑）
+window.__dm = { get grid() { return grid; }, get state() { return state; }, get aimCol() { return aimCol; } };
 </script>
 </body>
 </html>
